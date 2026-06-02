@@ -1,24 +1,49 @@
 import os
 import base64
+import mimetypes
 import requests
 
+# =========================
+# 配置区域（可按需修改）
+# =========================
 API_URL = "http://127.0.0.1:8080/v1/chat/completions"
+MODEL_NAME = "local-vision-model"  # llama.cpp / LM Studio 需要
 
-# 相对于脚本所在目录的路径，保证项目可移植
+# 相对于脚本所在目录的路径（保证可移植）
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 PHOTO_DIR = os.path.join(SCRIPT_DIR, "照片")
 OUTPUT_DIR = os.path.join(SCRIPT_DIR, "提示词目录")
 
 SUPPORTED_EXTENSIONS = (".jpg", ".jpeg", ".png", ".bmp", ".webp", ".gif")
-PROMPT_TEMPLATE = "请只输出这张图片的内容描述，要求包含光影、风格、构图等细节，不要有其他解释性文字或格式标记。用中文回复。"
+MAX_FILE_SIZE = 10 * 1024 * 1024  # 10MB
+
+PROMPT_TEMPLATE = (
+    "请只输出这张图片的内容描述，要求包含光影、风格、构图等细节，"
+    "不要有其他解释性文字或格式标记。用中文回复。"
+)
 
 
+# =========================
+# 核心函数
+# =========================
 def extract_prompt(image_path: str) -> str:
-    """通过 llama.cpp 多模态 API 提取图片提示词"""
+    """
+    通过本地 llama.cpp / LM Studio / kobya Vision API 提取图片提示词
+    """
+    # 文件大小检查
+    if os.path.getsize(image_path) > MAX_FILE_SIZE:
+        raise ValueError("图片文件过大（超过 10MB）")
+
+    # 读取并编码图片
     with open(image_path, "rb") as f:
         image_b64 = base64.b64encode(f.read()).decode("utf-8")
 
+    # 自动识别 MIME 类型
+    mime_type, _ = mimetypes.guess_type(image_path)
+    mime_type = mime_type or "image/jpeg"
+
     payload = {
+        "model": MODEL_NAME,
         "messages": [
             {
                 "role": "user",
@@ -26,20 +51,24 @@ def extract_prompt(image_path: str) -> str:
                     {"type": "text", "text": PROMPT_TEMPLATE},
                     {
                         "type": "image_url",
-                        "image_url": {"url": f"data:image/jpeg;base64,{image_b64}"}
+                        "image_url": {
+                            "url": f"data:{mime_type};base64,{image_b64}"
+                        }
                     }
                 ]
             }
         ]
     }
 
-    response = requests.post(API_URL, json=payload)
+    response = requests.post(API_URL, json=payload, timeout=120)
     response.raise_for_status()
     result = response.json()
+
     return result["choices"][0]["message"]["content"]
 
 
 def main():
+    # 确保输出目录存在
     os.makedirs(OUTPUT_DIR, exist_ok=True)
 
     image_files = [
